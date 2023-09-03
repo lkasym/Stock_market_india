@@ -1,0 +1,91 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import yfinance as yf
+import time
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from matplotlib.table import Table
+
+stock_symbol = 'RELIANCE.NS'
+
+def fetch_real_time_data(stock_symbol):
+    ticker = yf.Ticker(stock_symbol)
+    data = ticker.history(period="1d", interval="5m")  # Adjust to 5 minute intervals
+    return data
+
+def preprocess_data(data, look_back=10):  # Increase look_back to 10 for a longer view
+    X, Y = [], []
+    for i in range(len(data) - look_back - 1):
+        X.append(data[i:(i + look_back), 0])
+        Y.append(data[i + look_back, 0])
+    return np.array(X), np.array(Y)
+
+def train_lstm_model(X_train, Y_train, look_back=10, epochs=5):  # Update look_back to match preprocess_data
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.LSTM(50, input_shape=(1, look_back), return_sequences=True),
+        tf.keras.layers.LSTM(50),
+        tf.keras.layers.Dense(1)
+    ])
+
+    model.compile(loss='mean_squared_error', optimizer='adam')
+    model.fit(X_train.reshape(-1, 1, look_back), Y_train, epochs=epochs, batch_size=1, verbose=2)
+    return model
+
+def predict_next_price(model, X_test, scaler, look_back=10):  # Update look_back to match preprocess_data
+    predictions = model.predict(X_test.reshape(-1, 1, look_back))
+    return scaler.inverse_transform(predictions)
+
+def plot_stock_data(data):
+    fig, ax1 = plt.subplots()
+    ax2 = ax1.twinx()
+
+    ax1.plot(data['Close'], label='Close', color='g')
+    ax2.plot(data['Volume'], label='Volume', color='b')
+
+    ax1.set_ylabel('Price')
+    ax2.set_ylabel('Volume')
+    ax1.legend(loc='upper left')
+    ax2.legend(loc='upper right')
+    plt.title('Real-time Stock Prices and Volume')
+
+    plt.show()
+
+def main(stock_symbol):
+    while True:
+        real_time_data = fetch_real_time_data(stock_symbol)
+        dataset = real_time_data['Close'].values.reshape(-1, 1)
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        dataset = scaler.fit_transform(dataset)
+
+        look_back = 10  # Update look_back to match preprocess_data
+        train_size = int(len(dataset) * 0.67)
+        train, test = dataset[0:train_size, :], dataset[train_size:len(dataset), :]
+
+        X_train, Y_train = preprocess_data(train, look_back)
+        X_test, Y_test = preprocess_data(test, look_back)
+
+        model = train_lstm_model(X_train, Y_train, look_back=look_back, epochs=10)
+        predictions = predict_next_price(model, X_test, scaler, look_back=look_back)
+
+        current_price = dataset[-1, 0]
+        next_predicted_price = predictions[-1, 0]
+        current_volume = real_time_data['Volume'].iloc[-1]
+
+        # Add up/down indicator
+        if next_predicted_price > scaler.inverse_transform(current_price.reshape(-1, 1))[0, 0]:
+            indicator = "Up"
+        else:
+            indicator = "Down"
+
+        print(f"Current price: {scaler.inverse_transform(current_price.reshape(-1, 1))[0, 0]}")
+        print(f"Next predicted price: {next_predicted_price}")
+        print(f"Indicator: {indicator}")
+        print(f"Current volume: {current_volume}")
+
+        plot_stock_data(real_time_data)
+
+        time.sleep(30)  # Sleep for 30 seconds
+
+if __name__ == '__main__':
+    main(stock_symbol)
